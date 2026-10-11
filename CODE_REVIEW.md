@@ -6,8 +6,49 @@ price, solve for the risk-neutral drift `mu_Q` that makes the model price equal 
 price. Then value-weight `mu_Q` across the S&P 500 and back out the ERP from
 `r_A = mu_P - mu_Q + r_f` and `r_A = w_e*CoE + w_d*(1-tau)*CoD`.
 
-Line numbers refer to the committed file. Items are ordered by how much they distort the
+Line numbers refer to the originally committed file. Items are ordered by how much they distort the
 estimate of `mu_Q`.
+
+## 0. Cross-check against the paper (Nov 2016 version) and the course slides
+
+`egz_model.py` now implements Appendix A directly, and `test_egz_model.py` checks it.
+`get_frmyr_miu_q_egz()` in the script runs it on your data. What the paper settles:
+
+| Topic | Paper | Your code |
+|---|---|---|
+| Year-5 system (A5) | 4 equations in B, C, D, x_d: value matching and smooth pasting at x*, E(x_d)=0, E'(x_d)=0. No market price. | 2 equations with no `return`, using `prc` in place of B·x*^β2 |
+| x* (A2) | (1-τ)(c+F) / [1-τ + (τDSR-CSR)/GM] | `(1-τ + τDSR - CSR)/GM`, the wrong term divided by GM |
+| Debt (A6) | c/r + (x/x_d)^β2 [(1-α)V_U(x_d) - c/r]. The printed `(1-α)(V_U - c/r)` is a misprint, as slide 44 notes. | uses V_U(x5) |
+| Pre-refinancing equity (A7) | E'(x5) = E(x5) + D(x5), then minus LTD principal at T and floored at 0 | same idea (`tv_eq - debt`) |
+| Lattice (A8-A9) | recombining grid in y = ln x, dy = σ√dt, dt = 0.1. Node cash flows are deterministic. D_t is subtracted **only when due**. | random paths, broken indexing, principal subtracted at every node |
+| Distress cost | (A1): the whole negative cash flow is scaled by (1+η) | node test is on `x·Π < 0` instead of on the cash flow |
+| Coupon rate (Table 1) | AAA / BBB / BBB+2% **yields** for CHS quintiles 1-2 / 3-4 / 5 (mean 8.35%) | `rf + yield`, with a broken quintile test. **Fixed in the script.** |
+| r (Table 1) | average of the 3-month T-bill and 10-year Treasury yields | `df_rf['rf']`. Check which rate that column holds. |
+| Target leverage | industry average over the **last three years**; (DLC+DLTT)/(DLC+DLTT+ME) | current fiscal year only |
+| μ_P (eq. 10) | μ_P = CSR·R_A / ((1-τ)GM + τDSR) = κ·R_A | hard-coded `mu_p = 0.04` |
+
+**Most important point for the thesis (eqs. 10-11).** EGZ set μ_Q = r - R_A + μ_P with
+μ_P = κ·R_A. Substituting gives μ_Q = r - R_A(1-κ), so
+
+    R_A = (r - μ_Q) / (1 - κ),   κ = CSR / ((1-τ)·GM + τ·DSR)
+
+Inverting the price gives R_A directly, without assuming any μ_P. Do this per firm, because
+κ is firm-specific. Then CoE_i = (R_A,i - w_d·CoD)/w_e, and the market ERP is the
+value-weighted CoE minus r. Weighting μ_Q first and then applying one μ_P mixes firms
+with different κ, and the 4% assumption moves the ERP level one-for-one.
+
+**About the slide-41 note** ("set Bx^β2 = observed equity - (3rd - 4th term), C=0, D=B,
+x_d=x*"). It's a shortcut for calibration, not the paper's method. In an inversion it
+makes the problem circular: today's price would sit inside the year-5 boundary condition
+that is supposed to explain that price. The engine solves A5 exactly instead. This is
+cheap because x_d/x* depends only on (r, μ_Q, σ, η): one 1-D root per μ_Q, after which
+every coupon and node is closed form. A full μ_Q inversion takes about 0.5 s per
+firm-year.
+
+**S&P 500 caveat.** The paper bounds y = ln x ∈ [-5, 10], i.e. x ≤ $22bn when x is in
+$ millions. Many S&P 500 firms have gross margins above that. Your `cf_node` clips y at
+10, which caps their cash flows. The engine's tree covers only nodes reachable from y0,
+so there is no artificial cap.
 
 ## A. Bugs that stop the pipeline from producing a valid `mu_Q`
 

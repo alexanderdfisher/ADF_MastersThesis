@@ -15,6 +15,7 @@ import csv
 import matplotlib.pyplot as plt
 import tabulate as tabulate
 import matplotlib.dates as mdates
+import egz_model as egz
 
 us_30y_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\mktyld_us_10y.txt"
 us30y_df = pd.read_csv(us_30y_fp, na_values='.')
@@ -429,7 +430,7 @@ def get_vars_revival(gvkey, key):
     if couponrate is None:
         try:
             aaa_filt = aaa_df[(aaa_df['DATE'] <= fiscal_date)].sort_values(by='DATE', ascending=False)
-            couponrate = aaa_filt['AAA'].iloc[0]
+            couponrate = _to_decimal(aaa_filt['AAA'].iloc[0])
         except:
             pass
 
@@ -536,6 +537,9 @@ def roots(sigma, mu_q, rf):
     #beta1 = (math.sqrt(4*g**2 - 4*g*sigma**2 + 8*rf*sigma**2 + sigma**4) - 2*g + sigma**2)/(2*sigma**2)
     #beta2 = -(math.sqrt(4*g**2 - 4*g*sigma**2 + 8*rf*sigma**2 + sigma**4) + 2*g - sigma**2)/(2*sigma**2)
     return beta1, beta2
+def _to_decimal(rate):
+    # FRED corporate yields are quoted in percent (e.g. 11.5); the model needs decimals
+    return rate / 100 if rate > 1 else rate
 def coupon_rate(gvkey, key):
     str_key = str(key)
     year = int(str_key[:4])
@@ -579,14 +583,15 @@ def coupon_rate(gvkey, key):
     #    baa = aaa + float(0.01)
     #print(aaa, baa, rf)
 
-    if frm_quint == 0 or 1:
-        spread = aaa
-    if frm_quint == 2 or 3:
-        spread = baa
-    if frm_quint == 4:
-        spread = baa + float(0.02)
-
-    coupon_rate = (rf + spread)
+    # EGZ Table 1: coupon rate = AAA, BBB and BBB+2% yields for CHS quintiles 1-2, 3-4, 5
+    # (mean 8.35%), i.e. the yield itself, not rf + yield. Quintile labels here are 0-4.
+    aaa, baa = _to_decimal(aaa), _to_decimal(baa)
+    if frm_quint in (0, 1):
+        coupon_rate = aaa
+    elif frm_quint in (2, 3):
+        coupon_rate = baa
+    else:
+        coupon_rate = baa + 0.02
 
     return coupon_rate
 def check_cf(gm_5, xgm, dsr, csr, c, f):
@@ -1407,6 +1412,21 @@ def get_frmyr_miu_q_revival(gvkey, key):
 
 
     return
+
+def get_frmyr_miu_q_egz(gvkey, key):
+    """
+    Implied mu_Q (and R_A) for one firm-year using the paper-faithful engine in
+    egz_model.py. Replaces the find_root_brent_revival / get_model_prc_yr5_revival path.
+    """
+    sigma, xgm, gm, y_0, f, couponrate, csr, dsr, std, ltd, lev, rf, prc, shares, sti = get_vars_revival(gvkey, key)
+    firm = egz.FirmInputs(gm=gm, gm_ratio=xgm, csr=csr, dsr=dsr, F=f, sigma=sigma,
+                          ltd=ltd, std=std, coupon_rate=couponrate, st_rate=sti,
+                          target_lev=lev, r=rf, shares=shares)
+    mu_q = egz.implied_mu_q(prc, firm)
+    r_a = egz.implied_asset_return(mu_q, rf, xgm, csr, dsr)
+    return {'gvkey': gvkey, 'date': key, 'mu_q': mu_q, 'r_a': r_a, 'sigma': sigma, 'xgm': xgm,
+            'gm': gm, 'f': f, 'couponrate': couponrate, 'csr': csr, 'dsr': dsr, 'std': std,
+            'ltd': ltd, 'lev': lev, 'rf': rf, 'prc': prc, 'shares': shares, 'sti': sti}
 
 def build_rating_by_sic_df(df_dsf, df_sp_ratings, sp500_dict):
 
