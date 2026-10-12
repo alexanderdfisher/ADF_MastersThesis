@@ -17,28 +17,31 @@ import tabulate as tabulate
 import matplotlib.dates as mdates
 import egz_model as egz
 
-us_30y_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\mktyld_us_10y.txt"
+# Folder holding the input data; override with the EGZ_DATA_DIR environment variable
+DATA_DIR = os.environ.get("EGZ_DATA_DIR", r"C:\Users\Fisher\Desktop\Thesis\Main Data")
+
+us_30y_fp = os.path.join(DATA_DIR, "mktyld_us_10y.txt")
 us30y_df = pd.read_csv(us_30y_fp, na_values='.')
 us30y_df['DATE'] = pd.to_datetime(us30y_df['DATE'], format='%Y-%m-%d')
 us30y_df['YIELD'] = us30y_df['YIELD'] / 100
 
 # for every key in dict and every gvkey (value) associated with the key find the value of c that makes the firm mkt lev equal to twosic industry market lev, we end up with proper value for e_xi5 and d_xi5
-sp500_dict_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\sp500_constituents.xlsx"
+sp500_dict_fp = os.path.join(DATA_DIR, "sp500_constituents.xlsx")
 sp500_dict_df = pd.read_excel(sp500_dict_fp, 'constituents', na_values=['NaN', 'nan', 'Nan', '', 'NULL', '#N/A'])
 sp500_dict = sp500_dict_df.to_dict(orient='list')
 # df verison
-constituents_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\Sample\sp500_constituents_values.xlsx"
+constituents_fp = os.path.join(DATA_DIR, "Sample/sp500_constituents_values.xlsx")
 df_constituents = pd.read_excel(constituents_fp, 'constituents', na_values=['NaN', 'nan', 'Nan', '', 'NULL', '#N/A'])
 
 #prime data used of short term interest rate
 #prime data in whole number format must /100
-prime_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\USPRIME_DATA.csv"
+prime_fp = os.path.join(DATA_DIR, "USPRIME_DATA.csv")
 usprime_df = pd.read_csv(prime_fp, header=0, na_values=['.'],converters={'DPRIME': lambda x: float(x) if x != '.' else np.nan})
 usprime_df['DATE'] = pd.to_datetime(usprime_df['DATE'])
 
 
 #rf data & functions
-rf_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\Rf_SP500ret_annual.xlsx"
+rf_fp = os.path.join(DATA_DIR, "Rf_SP500ret_annual.xlsx")
 df_rf = pd.read_excel(rf_fp)
 df_rf['Date'] = pd.to_datetime(df_rf['Date'], format='%Y%m%d')
 def rf_frm(key):
@@ -61,23 +64,23 @@ def rf_prc(gvkey, year):
 
     return rf, obs_prc
 # Bond equivalent yield data
-bond_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\CORP_BOND_DTA.xlsx"
+bond_fp = os.path.join(DATA_DIR, "CORP_BOND_DTA.xlsx")
 aaa_df = pd.read_excel(bond_fp, sheet_name='AAA', parse_dates=['DATE'], na_values=['NaN', '', '#N/A'])
 baa_df = pd.read_excel(bond_fp, sheet_name='BAA', parse_dates=['DATE'], na_values=['NaN', '', '#N/A'])
 aaa_df['DATE'] = pd.to_datetime(aaa_df['DATE'])
 baa_df['DATE'] = pd.to_datetime(baa_df['DATE'])
 
-aaa_baa_spread_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\AAA_BAA_-10Y.xlsx"
+aaa_baa_spread_fp = os.path.join(DATA_DIR, "AAA_BAA_-10Y.xlsx")
 aaa_baa_spread_df = pd.read_excel(aaa_baa_spread_fp, sheet_name='Combined', parse_dates=['observation_date'], na_values=['NaN', '', '#N/A'])
 pd.to_datetime(aaa_baa_spread_df['observation_date'], format='%Y-%m-%d')
 
-OAS_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\OAS_1996_2022.xlsx"
+OAS_fp = os.path.join(DATA_DIR, "OAS_1996_2022.xlsx")
 OAS_df = pd.read_excel(OAS_fp, sheet_name='Combined', parse_dates=['observation_date'], na_values=['NaN', '', '#N/A'])
 pd.to_datetime(OAS_df['observation_date'], format='%Y-%m-%d')
 
 # File paths for the Excel files
-file_dbaa = r"C:\Users\Fisher\Desktop\Thesis\Main Data\DBAA.xlsx"  # Replace with the actual path to your DBAA file
-file_daaa = r"C:\Users\Fisher\Desktop\Thesis\Main Data\DAAA.xlsx" # Replace with the actual path to your DAAA file
+file_dbaa = os.path.join(DATA_DIR, "DBAA.xlsx")  # Replace with the actual path to your DBAA file
+file_daaa = os.path.join(DATA_DIR, "DAAA.xlsx") # Replace with the actual path to your DAAA file
 
 # Load the 'data' sheet from each Excel file into separate DataFrames
 df_dbaa = pd.read_excel(file_dbaa, sheet_name='data')
@@ -92,7 +95,7 @@ df_dbaa = df_dbaa.dropna()  # Drops rows where any column has a NaN
 df_dbaa = df_daaa.dropna()  # Drops rows where any column has a NaN
 
 # CHH variables and calculation to follow
-chs_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\all_chs_vars.csv"
+chs_fp = os.path.join(DATA_DIR, "all_chs_vars.csv")
 df_chs = pd.read_csv(chs_fp, names=['DATE', 'GVKEY', 'TWOSIC', 'SIGMA', 'RSIZE', 'EXRET', 'NIMTA', 'TLMTA', 'MB', 'CASHMTA', 'PRICE'], na_values=['', 'Nan', 'NaN', 'nan', 'null', 'NULL', float('inf'), -float('inf'), 'inf', '-inf'])
 df_chs.dropna(inplace=True)
 df_chs['DATE'] = pd.to_datetime(df_chs['DATE'], format='%Y-%m-%d')
@@ -126,7 +129,7 @@ df_chs['CHS'] = intercept_chs \
 df_chs['QUINTILE'] = df_chs.groupby(['TWOSIC', 'DATE'])['CHS'].transform(lambda x: pd.qcut(x, 5, labels=False, duplicates='drop'))
 
 # Capex and Deprec data
-csrdsr_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\All\ALL_FIRMS_CSR_DSR.csv"
+csrdsr_fp = os.path.join(DATA_DIR, "All/ALL_FIRMS_CSR_DSR.csv")
 df_csrdsr = pd.read_csv(csrdsr_fp, header=0)
 df_csrdsr['datadate'] = pd.to_datetime(df_csrdsr['datadate'], format='%Y%m%d')
 df_csrdsr['csr_pit'] = df_csrdsr['capx'] / df_csrdsr['sale']
@@ -136,7 +139,7 @@ df_csrdsr.sort_values(by=['year', 'gvkey'], inplace=True)
 df_csrdsr.dropna(inplace=True)
 
 # Sales Data
-saleq_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\Sample\Qtrly_Sales_COMP.csv"
+saleq_fp = os.path.join(DATA_DIR, "Sample/Qtrly_Sales_COMP.csv")
 df_saleq = pd.read_csv(saleq_fp, header=0)
 df_saleq['datadate'] = pd.to_datetime(df_saleq['datadate'], format='%Y%m%d')
 # Convert and create twosic
@@ -175,19 +178,19 @@ df_saleq.sort_values(by=['gvkey','fiscaldate'], inplace=True)
 df_saleq['saleq_pct_change'] = df_saleq.groupby('gvkey')['saleq'].pct_change()
 
 # Annual fundamental data
-fundy_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\Sample\fundamentals_pull_csv.csv"
+fundy_fp = os.path.join(DATA_DIR, "Sample/fundamentals_pull_csv.csv")
 df_fundy = pd.read_csv(fundy_fp, header=0, na_values=['','nan', 'Nan'])
 df_fundy['datadate'] = pd.to_datetime(df_fundy['datadate'], format='%Y%m%d')
 df_fundy['twosic'] = df_fundy['sic'].astype(str).str[:2].astype(int)
 
 # Market leverage data
-mktlev_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\All\CCM_MKT_LEV.xlsx"
+mktlev_fp = os.path.join(DATA_DIR, "All/CCM_MKT_LEV.xlsx")
 df_mktlev = pd.read_excel(mktlev_fp, na_values=['', 'na', 'NaN', '#N/A'])
 df_mktlev = df_mktlev[df_mktlev['MktLev'] != 0]  # Drops rows where 'mktlev' is 0
 df_mktlev = df_mktlev.dropna(subset=['MktLev'])
 
 # Daily stock file data (prices)
-dsf_fp = r"C:\Users\Fisher\Desktop\Thesis\Main Data\All\dailyCRSP_CHSdta.csv"
+dsf_fp = os.path.join(DATA_DIR, "All/dailyCRSP_CHSdta.csv")
 df_dsf = pd.read_csv(dsf_fp, na_values=['C', 'B'], header=0)
 df_dsf['DATE'] = pd.to_datetime(df_dsf['DATE'], format='%Y%m%d')
 df_dsf['PRC'] = df_dsf['PRC'].abs()
@@ -1850,10 +1853,23 @@ def find_yr_erp_revival(miuq_dict, cod_df, df_sp500_cap_structure, df_rf, us30y_
 #     #works but need to fix the guess logic for c in find c to match lev function
 #     main_multiprocess_wholebatch_revival(valid_pairs)
 
-# Run single company for testing
-gvkey = 1010
-year = 19831231
-get_frmyr_miu_q_revival(gvkey, year)
+# Run single firm-years with the EGZ engine, e.g.
+#   python RestartFromScratch_EGZ.py --gvkey 1010 --date 19831231 --out results.csv
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gvkey', type=int, nargs='+', default=[1010])
+    parser.add_argument('--date', type=int, default=19831231)
+    parser.add_argument('--out', default='egz_results.csv')
+    cli = parser.parse_args()
+    rows = []
+    for gv in cli.gvkey:
+        try:
+            rows.append(get_frmyr_miu_q_egz(gv, cli.date))
+            print(rows[-1])
+        except Exception as e:
+            print("failed:", gv, cli.date, repr(e))
+    pd.DataFrame(rows).to_csv(cli.out, index=False)
 
 # key = year
 #
