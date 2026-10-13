@@ -254,3 +254,22 @@ def implied_asset_return(mu_q, r, gm_ratio, csr, dsr, tau=TAU):
 def implied_cost_of_equity(R_A, cod, w_e, w_d, tau_d=0.0):
     """R_A = w_e*CoE + w_d*(1 - tau_d)*CoD solved for CoE (tau_d = 0: paper's WACC)."""
     return (R_A - w_d * (1.0 - tau_d) * cod) / w_e
+
+
+def market_erp(df):
+    """
+    Market ERP per date from firm-level results (columns: date, coe, me, rf).
+    The market portfolio has beta = 1, so ERP = value-weighted CoE - r.
+    """
+    import pandas as pd
+    d = df.dropna(subset=["coe", "me", "rf"])
+    d = d[d["me"] > 0]
+
+    def one(g):
+        w = g["me"] / g["me"].sum()
+        coe = float((w * g["coe"]).sum())
+        r = float(g["rf"].iloc[0])
+        return pd.Series({"n_firms": len(g), "coe_vw": coe, "rf": r, "erp": coe - r,
+                          "coe_median": float(g["coe"].median())})
+
+    return d.groupby("date").apply(one).reset_index()

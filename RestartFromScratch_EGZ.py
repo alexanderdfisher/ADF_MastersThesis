@@ -44,19 +44,22 @@ usprime_df['DATE'] = pd.to_datetime(usprime_df['DATE'])
 rf_fp = os.path.join(DATA_DIR, "Rf_SP500ret_annual.xlsx")
 df_rf = pd.read_excel(rf_fp)
 df_rf['Date'] = pd.to_datetime(df_rf['Date'], format='%Y%m%d')
-def rf_frm(key):
-    # Adjust date
+def risk_free(key):
+    # EGZ Table 1: r = average of the 3-month T-bill and 10-year Treasury yields.
+    # Assumes column 'rf' is the 3-month T-bill yield and '10y' the 10-year yield, both in percent.
     year_adj = key // 10000
     date_adj = datetime(year_adj, 1, 1)
-    rf = df_rf[(df_rf['Date'] == date_adj)]['rf'].iloc[0] / 100
-    return rf
+    row = df_rf[(df_rf['Date'] == date_adj)].iloc[0]
+    return (row['rf'] + row['10y']) / 2 / 100
+def rf_frm(key):
+    return risk_free(key)
 def rf_prc(gvkey, year):
     # Adjust date
     year_adj = year // 10000
     date_adj = datetime(year_adj, 1, 1)
 
     # Grab risk-free
-    rf = df_rf[(df_rf['Date'] == date_adj)]['rf'].iloc[0] / 100
+    rf = risk_free(year)
 
     df_obs_prc = df_dsf[(df_dsf['DATE'] <= datetime(year_adj, 12, 31)) & (df_dsf['GVKEY'] == gvkey)].sort_values(by='DATE', ascending=False)
 
@@ -1427,7 +1430,12 @@ def get_frmyr_miu_q_egz(gvkey, key):
                           target_lev=lev, r=rf, shares=shares)
     mu_q = egz.implied_mu_q(prc, firm)
     r_a = egz.implied_asset_return(mu_q, rf, xgm, csr, dsr)
-    return {'gvkey': gvkey, 'date': key, 'mu_q': mu_q, 'r_a': r_a, 'sigma': sigma, 'xgm': xgm,
+    # EGZ: R_A = w_e*CoE + w_d*CoD, CoD = CHS-quintile yield (couponrate), book debt weights
+    me = prc * shares
+    w_d = (std + ltd) / (std + ltd + me)
+    coe = egz.implied_cost_of_equity(r_a, couponrate, 1 - w_d, w_d)
+    return {'gvkey': gvkey, 'date': key, 'mu_q': mu_q, 'r_a': r_a, 'coe': coe, 'me': me,
+            'w_d': w_d, 'sigma': sigma, 'xgm': xgm,
             'gm': gm, 'f': f, 'couponrate': couponrate, 'csr': csr, 'dsr': dsr, 'std': std,
             'ltd': ltd, 'lev': lev, 'rf': rf, 'prc': prc, 'shares': shares, 'sti': sti}
 
@@ -1777,6 +1785,8 @@ def sp500_miuq(sp500_dict, weight_dict):
         miuq_dict[key] = miuq_econ
 
     return miuq_dict
+# Superseded by firm-level CoE in get_frmyr_miu_q_egz + egz.market_erp (EGZ eqs. 10-11,
+# paper WACC and CHS-quintile cost of debt). Kept for reference.
 def find_yr_erp_revival(miuq_dict, cod_df, df_sp500_cap_structure, df_rf, us30y_df):
     count = 0
     output_rows = []
@@ -1859,17 +1869,24 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--gvkey', type=int, nargs='+', default=[1010])
+    parser.add_argument('--sp500', action='store_true', help='run all S&P 500 constituents for --date')
     parser.add_argument('--date', type=int, default=19831231)
     parser.add_argument('--out', default='egz_results.csv')
     cli = parser.parse_args()
+    gvkeys = cli.gvkey
+    if cli.sp500:
+        gvkeys = [int(g) for g in sp500_dict[cli.date] if not pd.isna(g)]
     rows = []
-    for gv in cli.gvkey:
+    for gv in gvkeys:
         try:
             rows.append(get_frmyr_miu_q_egz(gv, cli.date))
             print(rows[-1])
         except Exception as e:
             print("failed:", gv, cli.date, repr(e))
-    pd.DataFrame(rows).to_csv(cli.out, index=False)
+    df_out = pd.DataFrame(rows)
+    df_out.to_csv(cli.out, index=False)
+    if len(df_out) > 1:
+        print(egz.market_erp(df_out))
 
 # key = year
 #

@@ -83,3 +83,18 @@ def test_asset_return_inversion_consistent_with_eq_10_11():
     k = kappa(0.35, 0.066, 0.048)
     mu_q = r - R_A + k * R_A
     assert implied_asset_return(mu_q, r, 0.35, 0.066, 0.048) == pytest.approx(R_A)
+
+
+def test_market_erp_value_weights_firm_coe():
+    import pandas as pd
+    from egz_model import market_erp
+    df = pd.DataFrame({"date": [1, 1], "coe": [0.10, 0.06], "me": [300.0, 100.0], "rf": [0.04, 0.04]})
+    out = market_erp(df).iloc[0]
+    assert out["coe_vw"] == pytest.approx(0.09)
+    assert out["erp"] == pytest.approx(0.05)
+
+
+def test_cost_of_equity_uses_paper_wacc_without_tax_shield():
+    from egz_model import implied_cost_of_equity
+    # R_A = 0.6*CoE + 0.4*CoD  ->  CoE = (0.08 - 0.4*0.07)/0.6
+    assert implied_cost_of_equity(0.08, 0.07, 0.6, 0.4) == pytest.approx((0.08 - 0.028) / 0.6)

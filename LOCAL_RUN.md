@@ -17,8 +17,9 @@ Windows PC. **Never commit data files.**
      firm against its actual market cap. If SHROUT is already in millions, remove the /1000.
    - Compustat sale, cogs, xsga, dltt and dlc should be in $ millions.
    - AAA/BAA yields (`CORP_BOND_DTA.xlsx`) and the `rf`/`10y` columns
-     (`Rf_SP500ret_annual.xlsx`): percent or decimal? Is `rf` a T-bill rate? The paper uses
-     the average of the 3-month T-bill and 10-year yields.
+     (`Rf_SP500ret_annual.xlsx`): `risk_free()` assumes both are yields in percent, with
+     `rf` the 3-month T-bill. It averages them, as the paper does (Table 1). If `rf` is a
+     T-bill *return* or a different maturity, fix the column used in `risk_free()`.
 3. `python RestartFromScratch_EGZ.py --gvkey 1010 --date 19831231 --out results/egz_1010.csv`
    - Show all inputs (sigma, xgm, gm, f, couponrate, csr, dsr, std, ltd, lev, rf, prc,
      shares, sti) and the outputs mu_q and r_a.
@@ -29,7 +30,9 @@ Windows PC. **Never commit data files.**
 4. Run about 20 S&P 500 constituents for 19831231 (`sp500_constituents.xlsx`, sheet
    `constituents`; pass several gvkeys to `--gvkey`). Summarise mu_q and R_A, and list each
    failure with its reason.
-5. Fix only clear, local bugs in the input functions (e.g. the `df_fundy['TWOSIC']` vs
+5. Full year: `python RestartFromScratch_EGZ.py --sp500 --date 19831231 --out results/egz_1983.csv`
+   prints the value-weighted CoE and ERP (`egz.market_erp`).
+6. Fix only clear, local bugs in the input functions (e.g. the `df_fundy['TWOSIC']` vs
    `'twosic'` KeyError). List anything bigger. Commit code only, never data or `results/`.
 
 Background: see `CODE_REVIEW.md` section 0. The old `*_revival` valuation functions are
