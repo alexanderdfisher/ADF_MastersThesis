@@ -1419,21 +1419,125 @@ def get_frmyr_miu_q_revival(gvkey, key):
 
     return
 
-def get_frmyr_miu_q_egz(gvkey, key):
+# (name, low, high, what it is) - plausible ranges, used only to flag values for a closer look
+INPUT_CHECKS = [
+    ('sigma', 0.02, 1.5, 'annualised quarterly sales volatility'),
+    ('xgm', 0.0, 1.0, 'gross margin ratio (Sales-COGS)/Sales'),
+    ('gm', 0.0, None, 'gross margin x0, $M'),
+    ('f', 0.0, None, 'fixed costs (XSGA), $M'),
+    ('couponrate', 0.02, 0.25, 'LTD coupon = CHS-quintile yield'),
+    ('csr', 0.0, 0.5, 'industry capex/sales (3y avg)'),
+    ('dsr', 0.0, 0.3, 'industry depreciation/sales (3y avg)'),
+    ('std', 0.0, None, 'short-term debt (DLC), $M'),
+    ('ltd', 0.0, None, 'long-term debt (DLTT), $M'),
+    ('lev', 0.0, 1.0, 'industry market leverage (refinancing target)'),
+    ('rf', 0.0, 0.20, 'risk-free rate, avg of 3m T-bill and 10y'),
+    ('prc', 0.0, None, 'observed share price, $'),
+    ('shares', 0.0, None, 'shares outstanding, millions'),
+    ('sti', 0.0, 0.25, 'short-term debt rate (prime)'),
+]
+
+
+def check_inputs(d):
+    """Print every input with its plausible range; returns the number of flagged values."""
+    flags = 0
+    print("  inputs:")
+    for name, lo, hi, desc in INPUT_CHECKS:
+        v = d[name]
+        zero_ok = name in ('f', 'std', 'ltd')  # zero fixed costs or debt is legitimate
+        bad = v is None or pd.isna(v) or (v < lo if zero_ok else v <= lo) or (hi is not None and v >= hi)
+        flags += bad
+        rng = f"({lo if lo is not None else '-inf'}, {hi if hi is not None else 'inf'})"
+        print(f"    {'CHECK' if bad else 'ok':5s} {name:10s} = {v!s:>14.12s}   {rng:14s} {desc}")
+
+    # derived quantities that catch unit and merge problems
+    sales = d['gm'] / d['xgm']
+    me = d['prc'] * d['shares']
+    pi = egz.pi_coef(d['xgm'], d['csr'], d['dsr'])
+    kap = egz.kappa(d['xgm'], d['csr'], d['dsr'])
+    derived = [
+        ('sales', sales, None, None, '$M, = gm / xgm'),
+        ('mkt equity', me, 1.0, 5e6, '$M, = prc * shares (way off -> check SHROUT units)'),
+        ('f / sales', d['f'] / sales, 0.0, 2.0, 'fixed-cost ratio'),
+        ('debt / ME', (d['std'] + d['ltd']) / me, 0.0, 20.0, 'book debt over market equity'),
+        ('Pi', pi, 0.0, 1.0, 'cash flow per $ gross margin; <= 0 means worthless firm'),
+        ('kappa', kap, 0.0, 1.0, 'mu_P = kappa * R_A; must be < 1 for the R_A inversion'),
+    ]
+    print("  derived:")
+    for name, v, lo, hi, desc in derived:
+        bad = pd.isna(v) or (lo is not None and v <= lo) or (hi is not None and v >= hi)
+        flags += bad
+        print(f"    {'CHECK' if bad else 'ok':5s} {name:10s} = {v:>14.4f}   {desc}")
+    print(f"  -> {flags} value(s) flagged" if flags else "  -> all inputs within plausible ranges")
+    return flags
+
+
+def summarize_data():
+    """One-line health check per dataset: rows, date range, missing values in key columns."""
+    datasets = [
+        ('CRSP daily', df_dsf, 'DATE', ['PRC', 'SHROUT', 'GVKEY']),
+        ('Compustat annual', df_fundy, 'datadate', ['sale', 'cogs', 'xsga', 'dltt', 'dlc']),
+        ('Compustat quarterly sales', df_saleq, 'fiscaldate', ['saleq']),
+        ('Capex/Dep (CSR/DSR)', df_csrdsr, 'datadate', ['capx', 'dp', 'sale']),
+        ('CHS variables', df_chs, 'DATE', ['CHS', 'QUINTILE', 'TWOSIC']),
+        ('Industry leverage', df_mktlev, None, ['MktLev', 'twosic', 'FiscalYr']),
+        ('Risk-free', df_rf, 'Date', ['rf', '10y']),
+        ('AAA yields', aaa_df, 'DATE', ['AAA']),
+        ('BAA yields', baa_df, 'DATE', ['BAA']),
+        ('Prime rate', usprime_df, 'DATE', ['DPRIME']),
+    ]
+    print("=== data loaded ===")
+    for name, df, dcol, cols in datasets:
+        span = f"{df[dcol].min():%Y-%m-%d} .. {df[dcol].max():%Y-%m-%d}" if dcol else ""
+        nans = ", ".join(f"{c}:{df[c].isna().mean():.1%}" for c in cols if c in df.columns)
+        missing = [c for c in cols if c not in df.columns]
+        print(f"  {name:27s} {len(df):>10,} rows  {span:24s} NaN {nans}"
+              + (f"  MISSING COLUMNS {missing}" if missing else ""))
+    print(f"  rf sample (first rows, raw): {df_rf[['rf', '10y']].head(3).values.tolist()}"
+          "  <- yields in percent expected")
+    print(f"  AAA sample (raw): {aaa_df['AAA'].dropna().head(3).tolist()}  <- percent expected")
+    print(f"  SHROUT median (raw): {df_dsf['SHROUT'].median():,.0f}  <- CRSP thousands: typically 10,000-100,000")
+
+
+def get_frmyr_miu_q_egz(gvkey, key, verbose=True):
     """
     Implied mu_Q (and R_A) for one firm-year using the paper-faithful engine in
     egz_model.py. Replaces the find_root_brent_revival / get_model_prc_yr5_revival path.
     """
     sigma, xgm, gm, y_0, f, couponrate, csr, dsr, std, ltd, lev, rf, prc, shares, sti = get_vars_revival(gvkey, key)
+    inputs = dict(sigma=sigma, xgm=xgm, gm=gm, f=f, couponrate=couponrate, csr=csr, dsr=dsr,
+                  std=std, ltd=ltd, lev=lev, rf=rf, prc=prc, shares=shares, sti=sti)
+    if verbose:
+        print(f"\n=== gvkey {gvkey}, {key} ===")
+        check_inputs(inputs)
+    missing = [k for k, v in inputs.items() if v is None or pd.isna(v)]
+    if missing:
+        raise ValueError(f"missing inputs {missing}")
+    if gm <= 0:
+        raise ValueError(f"non-positive gross margin {gm}; excluded as in EGZ")
+
     firm = egz.FirmInputs(gm=gm, gm_ratio=xgm, csr=csr, dsr=dsr, F=f, sigma=sigma,
                           ltd=ltd, std=std, coupon_rate=couponrate, st_rate=sti,
                           target_lev=lev, r=rf, shares=shares)
-    mu_q = egz.implied_mu_q(prc, firm)
+    if verbose:
+        print("  valuation:")
+    mu_q = egz.implied_mu_q(prc, firm, verbose=verbose)
     r_a = egz.implied_asset_return(mu_q, rf, xgm, csr, dsr)
     # EGZ: R_A = w_e*CoE + w_d*CoD, CoD = CHS-quintile yield (couponrate), book debt weights
     me = prc * shares
     w_d = (std + ltd) / (std + ltd + me)
     coe = egz.implied_cost_of_equity(r_a, couponrate, 1 - w_d, w_d)
+    if verbose and np.isfinite(mu_q):
+        t = {}
+        egz.equity_value(mu_q, firm, trace=t)
+        print(f"  model at mu_Q = {mu_q:+.5f}:")
+        egz.print_trace(t)
+        print(f"    fit          : model price {t['equity_0'] / shares:.4f} vs observed {prc:.4f}")
+        print("  discount rates (EGZ eqs. 10-11):")
+        print(f"    R_A = (r - mu_Q)/(1 - kappa) = ({rf:.4f} - ({mu_q:+.4f}))/(1 - "
+              f"{egz.kappa(xgm, csr, dsr):.4f}) = {r_a:.4f}")
+        print(f"    CoE = (R_A - w_d*CoD)/w_e   = ({r_a:.4f} - {w_d:.3f}*{couponrate:.4f})/{1 - w_d:.3f} = {coe:.4f}")
+        print(f"    implied firm premium CoE - r = {coe - rf:+.4f}")
     return {'gvkey': gvkey, 'date': key, 'mu_q': mu_q, 'r_a': r_a, 'coe': coe, 'me': me,
             'w_d': w_d, 'sigma': sigma, 'xgm': xgm,
             'gm': gm, 'f': f, 'couponrate': couponrate, 'csr': csr, 'dsr': dsr, 'std': std,
@@ -1872,17 +1976,22 @@ if __name__ == "__main__":
     parser.add_argument('--sp500', action='store_true', help='run all S&P 500 constituents for --date')
     parser.add_argument('--date', type=int, default=19831231)
     parser.add_argument('--out', default='egz_results.csv')
+    parser.add_argument('--quiet', action='store_true', help='only print one line per firm')
     cli = parser.parse_args()
+    summarize_data()
     gvkeys = cli.gvkey
     if cli.sp500:
         gvkeys = [int(g) for g in sp500_dict[cli.date] if not pd.isna(g)]
     rows = []
     for gv in gvkeys:
         try:
-            rows.append(get_frmyr_miu_q_egz(gv, cli.date))
-            print(rows[-1])
+            rows.append(get_frmyr_miu_q_egz(gv, cli.date, verbose=not cli.quiet))
+            res = rows[-1]
+            print(f"RESULT gvkey={gv} mu_Q={res['mu_q']:+.4f} R_A={res['r_a']:.4f} CoE={res['coe']:.4f}")
         except Exception as e:
-            print("failed:", gv, cli.date, repr(e))
+            print(f"FAILED gvkey={gv} {cli.date}: {e!r}")
+    print(f"\n=== {len(rows)}/{len(gvkeys)} firm-years valued; "
+          f"{sum(np.isnan(r['mu_q']) for r in rows)} without a mu_Q root ===")
     df_out = pd.DataFrame(rows)
     df_out.to_csv(cli.out, index=False)
     if len(df_out) > 1:

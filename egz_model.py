@@ -153,12 +153,14 @@ class StructuralBlock:
             return 0.0
         return brentq(f, lo, hi, xtol=1e-10 * max(1.0, c_max))
 
-    def pre_refi_equity(self, x5, F, pi, target_lev):
+    def pre_refi_equity(self, x5, F, pi, target_lev, coupons_out=None):
         """E'(x5) = E(x5) + D(x5)  (A7): the new debt proceeds go to shareholders."""
         x5 = np.atleast_1d(np.asarray(x5, dtype=float))
         out = np.empty_like(x5)
         for i, x in enumerate(x5):
             c = self.coupon_for_leverage(x, F, pi, target_lev)
+            if coupons_out is not None:
+                coupons_out.append(c)
             out[i] = float(self.equity(x, c, F, pi)) + float(self.debt(x, c, F, pi))
         return out
 
@@ -183,8 +185,11 @@ class FirmInputs:
     shares: float = 1.0  # shares outstanding (so that equity/shares = price)
 
 
-def equity_value(mu_q, f: FirmInputs, T=5.0, N=50, eta=ETA, tau=TAU, alpha=ALPHA):
-    """Model equity value at t = 0 for a given risk-neutral drift mu_Q."""
+def equity_value(mu_q, f: FirmInputs, T=5.0, N=50, eta=ETA, tau=TAU, alpha=ALPHA, trace=None):
+    """
+    Model equity value at t = 0 for a given risk-neutral drift mu_Q.
+    Pass a dict as `trace` to collect intermediate values (see `print_trace`).
+    """
     if f.gm <= 0:
         raise ValueError("gross margin must be positive (paper excludes x0 <= 0)")
     dt = T / N
@@ -201,7 +206,17 @@ def equity_value(mu_q, f: FirmInputs, T=5.0, N=50, eta=ETA, tau=TAU, alpha=ALPHA
     # terminal nodes j = 0..N, y = y0 + (2j - N) dy
     blk = StructuralBlock(f.r, mu_q, f.sigma, eta, tau, alpha)
     xT = np.exp(y0 + (2 * np.arange(N + 1) - N) * dy)
-    E = np.maximum(blk.pre_refi_equity(xT, f.F, pi, f.target_lev) - f.ltd, 0.0)
+    coupons = [] if trace is not None else None
+    E_pre = blk.pre_refi_equity(xT, f.F, pi, f.target_lev, coupons)
+    E = np.maximum(E_pre - f.ltd, 0.0)
+    if trace is not None:
+        trace.update(mu_q=mu_q, dt=dt, dy=dy, p_u=p_u, pi=pi, beta1=blk.b1, beta2=blk.b2,
+                     u_d=blk.u_d, x_T_min=xT.min(), x_T_max=xT.max(),
+                     coupon_T_min=min(coupons), coupon_T_max=max(coupons),
+                     unlevered_T_share=float(np.mean(np.array(coupons) == 0)),
+                     default_T_share=float(np.mean(E == 0)),
+                     x_star_today=x_star(f.coupon_rate * f.ltd + f.st_rate * f.std, f.F, pi, tau)
+                     if pi > 0 else np.nan, defaulted_nodes=0, total_nodes=N + 1)
 
     for m in range(N - 1, -1, -1):
         x = np.exp(y0 + (2 * np.arange(m + 1) - m) * dy)
@@ -211,14 +226,36 @@ def equity_value(mu_q, f: FirmInputs, T=5.0, N=50, eta=ETA, tau=TAU, alpha=ALPHA
         cf = np.where(cf < 0, (1 + eta) * cf, cf) * dt
         principal = f.std if m == m_std else 0.0
         E = np.maximum(disc * (p_u * E[1:] + p_d * E[:-1]) + cf - principal, 0.0)
+        if trace is not None:
+            trace["defaulted_nodes"] += int(np.sum(E == 0))
+            trace["total_nodes"] += m + 1
+            if m == m_std:
+                trace["default_share_year1"] = float(np.mean(E == 0))
+    if trace is not None:
+        trace["equity_0"] = float(E[0])
     return float(E[0])
+
+
+def print_trace(t):
+    """Readable summary of an `equity_value(..., trace=t)` run."""
+    print(f"    lattice      : dt={t['dt']:.2f}  dy={t['dy']:.4f}  p_u={t['p_u']:.4f}")
+    print(f"    cash flow    : Pi={t['pi']:.4f} per $ of gross margin; "
+          f"x* today={t['x_star_today']:.2f} (cash flow < 0 below this)")
+    print(f"    year-5 block : beta1={t['beta1']:.3f}  beta2={t['beta2']:.3f}  x_d/x*={t['u_d']:.4f}")
+    print(f"    year-5 nodes : x in [{t['x_T_min']:.1f}, {t['x_T_max']:.1f}]  "
+          f"coupon in [{t['coupon_T_min']:.2f}, {t['coupon_T_max']:.2f}]  "
+          f"no new debt possible={t['unlevered_T_share']:.0%}  "
+          f"equity=0 after LTD repayment={t['default_T_share']:.0%}")
+    print(f"    default      : {t['defaulted_nodes']}/{t['total_nodes']} lattice nodes at zero equity; "
+          f"year-1 nodes in default={t.get('default_share_year1', float('nan')):.0%}")
+    print(f"    equity today : {t['equity_0']:.2f}")
 
 
 def model_price(mu_q, f: FirmInputs, **kw):
     return equity_value(mu_q, f, **kw) / f.shares
 
 
-def implied_mu_q(price, f: FirmInputs, lo=-0.30, hi=None, n_scan=25, **kw):
+def implied_mu_q(price, f: FirmInputs, lo=-0.30, hi=None, n_scan=25, verbose=False, **kw):
     """
     Risk-neutral drift that equates model and observed price. Scans for a sign
     change first (the objective is deterministic, so this is reliable) and then
@@ -234,9 +271,25 @@ def implied_mu_q(price, f: FirmInputs, lo=-0.30, hi=None, n_scan=25, **kw):
 
     grid = np.linspace(lo, hi, n_scan)
     vals = np.array([diff(m) for m in grid])
+    if verbose:
+        print(f"    mu_Q scan (observed price {price:.2f}):")
+        for m, v in zip(grid, vals):
+            mp = "  n/a (p_u outside [0,1])" if not np.isfinite(v) else f"{v + price:12.2f}"
+            print(f"      mu_Q={m:+.4f}  model price={mp}")
     for a, b, fa, fb in zip(grid[:-1], grid[1:], vals[:-1], vals[1:]):
         if np.isfinite(fa) and np.isfinite(fb) and fa * fb <= 0:
-            return brentq(diff, a, b, xtol=1e-6)
+            root = brentq(diff, a, b, xtol=1e-6)
+            if verbose:
+                print(f"    root bracket [{a:+.4f}, {b:+.4f}] -> mu_Q = {root:+.5f}")
+            return root
+    if verbose:
+        fin = vals[np.isfinite(vals)]
+        if fin.size == 0:
+            print("    NO ROOT: model price undefined on the whole grid")
+        elif np.all(fin > 0):
+            print("    NO ROOT: model price is above the observed price even at the lowest mu_Q")
+        else:
+            print("    NO ROOT: model price stays below the observed price even as mu_Q -> r")
     return np.nan
 
 
