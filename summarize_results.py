@@ -221,8 +221,8 @@ def shade_recessions(ax, rec):
             ax.axvspan(y - 0.5, y + 0.5, color=SHADE, zorder=0, lw=0)
 
 
-def label_end(ax, x, y, text, color):
-    ax.annotate(text, (x, y), xytext=(6, 0), textcoords="offset points", va="center", color=INK2, fontsize=9)
+def label_end(ax, x, y, text, color, dy=0):
+    ax.annotate(text, (x, y), xytext=(6, dy), textcoords="offset points", va="center", color=INK2, fontsize=9)
     ax.plot([x], [y], "o", color=color, ms=4)
 
 
@@ -248,10 +248,11 @@ def fig_components(annual, rf, rec):
     fig, ax = plt.subplots(figsize=(9, 4.2))
     shade_recessions(ax, rec)
     x = annual.index
-    for y, c, lab in [(annual["CoE VW"], BLUE, "Cost of equity (VW)"), (annual["R_A VW"], AQUA, "Return on assets R_A (VW)"),
-                      (annual["r (avg 3m,10y)"], ORANGE, "Risk-free r")]:
+    for y, c, lab, dy in [(annual["CoE VW"], BLUE, "Cost of equity (VW)", 6),
+                          (annual["R_A VW"], AQUA, "Return on assets R_A (VW)", -6),
+                          (annual["r (avg 3m,10y)"], ORANGE, "Risk-free r", 0)]:
         ax.plot(x, 100 * y, color=c, label=lab)
-        label_end(ax, x[-1], 100 * y.iloc[-1], f"{100 * y.iloc[-1]:.1f}%", c)
+        label_end(ax, x[-1], 100 * y.iloc[-1], f"{100 * y.iloc[-1]:.1f}%", c, dy)
     ax.set_ylabel("percent")
     ax.set_ylim(bottom=0)
     ax.set_title("Discount-rate components: the ERP is the gap between the blue and orange lines")
@@ -287,7 +288,7 @@ def fig_box(ok):
                     capprops=dict(color=INK2, lw=1), boxprops=dict(facecolor="#b7d3f6", edgecolor=BLUE, lw=1),
                     whis=(5, 95))
     ax.axhline(0, color=ORANGE, lw=1)
-    ax.set_xticks(years[::3])
+    ax.set_xticks(years[::3], labels=[str(y) for y in years[::3]])
     ax.set_ylabel("firm CoE - r, percent")
     ax.set_title("Cross-section of firm-level premia (boxes: 25-75%, whiskers: 5-95%)")
     return fig
