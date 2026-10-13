@@ -46,11 +46,11 @@ df_rf = pd.read_excel(rf_fp)
 df_rf['Date'] = pd.to_datetime(df_rf['Date'], format='%Y%m%d')
 def risk_free(key):
     # EGZ Table 1: r = average of the 3-month T-bill and 10-year Treasury yields.
-    # Assumes column 'rf' is the 3-month T-bill yield and '10y' the 10-year yield, both in percent.
+    # Columns '3mo' and '10y' are yields in percent; 'rf' already holds their average.
     year_adj = key // 10000
     date_adj = datetime(year_adj, 1, 1)
     row = df_rf[(df_rf['Date'] == date_adj)].iloc[0]
-    return (row['rf'] + row['10y']) / 2 / 100
+    return (row['3mo'] + row['10y']) / 2 / 100
 def rf_frm(key):
     return risk_free(key)
 def rf_prc(gvkey, year):
@@ -95,7 +95,7 @@ df_daaa['DATE'] = pd.to_datetime(df_daaa['DATE'], errors='coerce', format='%Y-%m
 
 # Clean null values: Remove rows with any null values in both DataFrames
 df_dbaa = df_dbaa.dropna()  # Drops rows where any column has a NaN
-df_dbaa = df_daaa.dropna()  # Drops rows where any column has a NaN
+df_daaa = df_daaa.dropna()  # Drops rows where any column has a NaN
 
 # CHH variables and calculation to follow
 chs_fp = os.path.join(DATA_DIR, "all_chs_vars.csv")
@@ -398,7 +398,7 @@ def get_vars_revival(gvkey, key):
         try:
             df_filt_findsic = df_fundy[(df_fundy['gvkey'] == gvkey) & (df_fundy['fyear'] <= year)].sort_values(
                 by='fyear', ascending=False)
-            twosic = df_filt_findsic['TWOSIC'].iloc[0]
+            twosic = df_filt_findsic['twosic'].iloc[0]
         except Exception as e:
             print(f"Error twsoic: {e}", gvkey, key)
             twosic = None
@@ -1481,7 +1481,7 @@ def summarize_data():
         ('Capex/Dep (CSR/DSR)', df_csrdsr, 'datadate', ['capx', 'dp', 'sale']),
         ('CHS variables', df_chs, 'DATE', ['CHS', 'QUINTILE', 'TWOSIC']),
         ('Industry leverage', df_mktlev, None, ['MktLev', 'twosic', 'FiscalYr']),
-        ('Risk-free', df_rf, 'Date', ['rf', '10y']),
+        ('Risk-free', df_rf, 'Date', ['3mo', '10y']),
         ('AAA yields', aaa_df, 'DATE', ['AAA']),
         ('BAA yields', baa_df, 'DATE', ['BAA']),
         ('Prime rate', usprime_df, 'DATE', ['DPRIME']),
@@ -1493,7 +1493,7 @@ def summarize_data():
         missing = [c for c in cols if c not in df.columns]
         print(f"  {name:27s} {len(df):>10,} rows  {span:24s} NaN {nans}"
               + (f"  MISSING COLUMNS {missing}" if missing else ""))
-    print(f"  rf sample (first rows, raw): {df_rf[['rf', '10y']].head(3).values.tolist()}"
+    print(f"  rf sample (first rows, raw): {df_rf[['3mo', '10y']].head(3).values.tolist()}"
           "  <- yields in percent expected")
     print(f"  AAA sample (raw): {aaa_df['AAA'].dropna().head(3).tolist()}  <- percent expected")
     print(f"  SHROUT median (raw): {df_dsf['SHROUT'].median():,.0f}  <- CRSP thousands: typically 10,000-100,000")
