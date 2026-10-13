@@ -140,6 +140,27 @@ df_csrdsr['dsr_pit'] = df_csrdsr['dp'] / df_csrdsr['sale']
 # Sort df_csrdsr by 'year' 'gvkey'
 df_csrdsr.sort_values(by=['year', 'gvkey'], inplace=True)
 df_csrdsr.dropna(inplace=True)
+df_csrdsr = df_csrdsr[df_csrdsr['sale'] > 0].copy()
+df_csrdsr['twosic'] = df_csrdsr['sic'].astype(int).astype(str).str.zfill(4).str[:2].astype(int)
+# 3-year average per firm (avg_*: industry input, needs 3 years; own_*: firm's own, any 1-3 years)
+for _v in ('csr', 'dsr'):
+    _g = df_csrdsr.groupby('gvkey')[f'{_v}_pit']
+    df_csrdsr[f'avg_{_v}'] = _g.transform(lambda s: s.rolling(3, min_periods=3).mean())
+    df_csrdsr[f'own_{_v}'] = _g.transform(lambda s: s.rolling(3, min_periods=1).mean())
+    # winsorize at the 5th/95th percentiles of each year's cross-section: firms with near-zero
+    # sales otherwise dominate the industry mean (1983 SIC 28: mean CSR 0.29, median 0.05)
+    _lo = df_csrdsr.groupby('year')[f'avg_{_v}'].transform(lambda s: s.quantile(0.05))
+    _hi = df_csrdsr.groupby('year')[f'avg_{_v}'].transform(lambda s: s.quantile(0.95))
+    df_csrdsr[f'avg_{_v}'] = df_csrdsr[f'avg_{_v}'].clip(_lo, _hi)
+# CHS distress quintile of each firm-year, for the industry-distress averages (EGZ Table 1)
+_chs_q = df_chs[['GVKEY', 'DATE', 'QUINTILE']].assign(gvkey=df_chs['GVKEY'].astype(int), year=df_chs['DATE'].dt.year)
+df_csrdsr = df_csrdsr.merge(_chs_q[['gvkey', 'year', 'QUINTILE']].drop_duplicates(['gvkey', 'year']),
+                            on=['gvkey', 'year'], how='left')
+_csr_cols = dict(n=('avg_csr', 'size'), csr=('avg_csr', 'mean'), dsr=('avg_dsr', 'mean'))
+_ind_csr = df_csrdsr.dropna(subset=['avg_csr', 'avg_dsr']).groupby(['twosic', 'year']).agg(**_csr_cols)
+_ind_q_csr = df_csrdsr.dropna(subset=['avg_csr', 'avg_dsr', 'QUINTILE']).groupby(
+    ['twosic', 'year', 'QUINTILE']).agg(**_csr_cols)
+MIN_CELL = 5  # fewer firms in an industry-distress cell -> use the industry-only average
 
 # Sales Data
 saleq_fp = os.path.join(DATA_DIR, "Sample/Qtrly_Sales_COMP.csv")
@@ -293,51 +314,42 @@ def sigma_frm(gvkey, year, twosic):
 
     return sigma
 
-def fixed_costs(gvkey, year):
-
-
-    # Adjust date
+def _xsga_rows(gvkey, year):
     year_adj = year // 10000
-    df_sga = df_fundy[(df_fundy['fyear'] == year_adj) & (df_fundy['gvkey'] == gvkey)]
-    # for f is a % of sales
-    try:
-        f_ratio = df_sga['xsga'].iloc[0] / df_sga['sale'].iloc[0]
-        f = df_sga['xsga'].iloc[0]
-    except:
-        f = '.'
-        f_ratio = 0
-
-    #try closest available year's data
-    try:
-        if f == '.' or f == 'nan' or f_ratio == 0 or f_ratio == 'nan' or pd.isna(f) or pd.isna(f_ratio):
-            date_adj = datetime(year_adj, 12, 31)
-            df_sga = df_fundy[(df_fundy['datadate'] <= date_adj) & (df_fundy['gvkey'] == gvkey)].sort_values(by='datadate', ascending=False)
-            f_ratio = df_sga['xsga'].iloc[0] / df_sga['sale'].iloc[0]
-            f = df_sga['xsga'].iloc[0]
-    except:
-        f = None
-        f_ratio = None
-
-    return f, f_ratio
-def csr_dsr(twosic, year):
-
-    # create new avg columns, this means each years avg_csr or avg_dsr represents the avg of the last
-    df_csrdsr['avg_csr'] = df_csrdsr.groupby('gvkey')['csr_pit'].rolling(window=3, min_periods=3).mean().reset_index(level=0, drop=True)
-    df_csrdsr['avg_dsr'] = df_csrdsr.groupby('gvkey')['dsr_pit'].rolling(window=3, min_periods=3).mean().reset_index(level=0, drop=True)
-
-    # Convert and create twosic
-    df_csrdsr['sic'] = df_csrdsr['sic'].astype(str)
-    df_csrdsr['twosic'] = df_csrdsr['sic'].str[:2]  # Extract left two characters
-    df_csrdsr['twosic'] = df_csrdsr['twosic'].astype(int) # Convert back to integer
-
-    # adjust dict key
-    year_adj = pd.to_datetime(year, format='%Y%m%d').year
-    df_csrdsr_ind_filt = df_csrdsr[(df_csrdsr['twosic'] == twosic) & (df_csrdsr['year'] == year_adj)]
-
-    avg_ind_csr = df_csrdsr_ind_filt['avg_csr'].mean(skipna=True)
-    avg_ind_dsr = df_csrdsr_ind_filt['avg_dsr'].mean(skipna=True)
-
-    return avg_ind_csr, avg_ind_dsr
+    return df_fundy[(df_fundy['gvkey'] == gvkey) & (df_fundy['fyear'] <= year_adj)
+                    & (df_fundy['xsga'] > 0) & (df_fundy['sale'] > 0)].sort_values(by='fyear', ascending=False)
+def xsga_missing(gvkey, year):
+    return _xsga_rows(gvkey, year).empty
+def fixed_costs(gvkey, year):
+    # F = XSGA of the fiscal year, else of the most recent earlier year that reports it.
+    # No XSGA in any year: Compustat folds SG&A into COGS when it is not reported separately,
+    # so the gross margin is already net of it and F = 0 (flagged via xsga_missing).
+    df_sga = _xsga_rows(gvkey, year)
+    if df_sga.empty:
+        return 0.0, 0.0
+    f = df_sga['xsga'].iloc[0]
+    return f, f / df_sga['sale'].iloc[0]
+def csr_dsr(twosic, year, quintile=None):
+    """
+    Industry CSR/DSR (3-year firm averages, winsorized 5/95 per year), averaged within the
+    2-digit SIC x CHS distress quintile as in EGZ Table 1. Falls back to the industry-only
+    average when the cell has fewer than MIN_CELL firms or the quintile is unknown.
+    """
+    year_adj = year // 10000
+    if quintile is not None and not pd.isna(quintile) and (twosic, year_adj, quintile) in _ind_q_csr.index:
+        row = _ind_q_csr.loc[(twosic, year_adj, quintile)]
+        if row['n'] >= MIN_CELL:
+            return row['csr'], row['dsr']
+    if (twosic, year_adj) in _ind_csr.index:
+        row = _ind_csr.loc[(twosic, year_adj)]
+        return row['csr'], row['dsr']
+    return np.nan, np.nan
+def firm_csr_dsr(gvkey, year):
+    """Firm's own CSR/DSR averaged over its last 1-3 years (fallback when industry values give Pi <= 0)."""
+    row = df_csrdsr[(df_csrdsr['gvkey'] == gvkey) & (df_csrdsr['year'] == year // 10000)]
+    if row.empty:
+        return np.nan, np.nan
+    return row['own_csr'].iloc[-1], row['own_dsr'].iloc[-1]
 def find_ind_mkt_lev(sp500_key, twosic):
 
     # Grab twosic and make coupon rate calc
@@ -390,8 +402,10 @@ def get_vars_revival(gvkey, key):
         df_filt_findsic = df_chs[(df_chs['DATE'] <= fiscal_date) & (df_chs['GVKEY'] == gvkey)].sort_values(by='DATE',
                                                                                                            ascending=False)
         twosic = df_filt_findsic['TWOSIC'].iloc[0]
+        quintile = df_filt_findsic['QUINTILE'].iloc[0]
     except:
         twosic = None
+        quintile = None
 
 
     if twosic is None:
@@ -484,7 +498,7 @@ def get_vars_revival(gvkey, key):
 
 
     try:
-        csr, dsr = csr_dsr(twosic, key)
+        csr, dsr = csr_dsr(twosic, key, quintile)
     except Exception as e:
         print(f"Error csr and dsr: {e}", gvkey, key)
         csr, dsr = None, None
@@ -1499,22 +1513,44 @@ def summarize_data():
     print(f"  SHROUT median (raw): {df_dsf['SHROUT'].median():,.0f}  <- CRSP thousands: typically 10,000-100,000")
 
 
-def get_frmyr_miu_q_egz(gvkey, key, verbose=True):
+def is_financial(gvkey, key):
+    """Compustat 2-digit SIC 60-69: gross margin is not a meaningful state variable for these firms."""
+    d = df_fundy[(df_fundy['gvkey'] == gvkey) & (df_fundy['fyear'] <= key // 10000)].sort_values('fyear')
+    return not d.empty and 60 <= d['twosic'].iloc[-1] <= 69
+
+
+def get_frmyr_miu_q_egz(gvkey, key, verbose=True, include_financials=False):
     """
     Implied mu_Q (and R_A) for one firm-year using the paper-faithful engine in
     egz_model.py. Replaces the find_root_brent_revival / get_model_prc_yr5_revival path.
     """
+    if not include_financials and is_financial(gvkey, key):
+        raise ValueError("financial firm (SIC 60-69) excluded")
     sigma, xgm, gm, y_0, f, couponrate, csr, dsr, std, ltd, lev, rf, prc, shares, sti = get_vars_revival(gvkey, key)
+    f_imputed = xsga_missing(gvkey, key)
+    csr_source = 'industry'
+    # Industry capex can exceed what a low-margin firm earns (Pi <= 0): the model then values the
+    # firm at ~0 for every mu_Q and no root exists. Use the firm's own CSR/DSR instead (flagged).
+    if xgm is not None and xgm > 0 and not pd.isna(csr) and egz.pi_coef(xgm, csr, dsr) <= 0:
+        own_csr, own_dsr = firm_csr_dsr(gvkey, key)
+        if verbose:
+            print(f"  Pi <= 0 with industry CSR/DSR ({csr:.3f}/{dsr:.3f}); "
+                  f"using the firm's own ({own_csr:.3f}/{own_dsr:.3f})")
+        csr, dsr, csr_source = own_csr, own_dsr, 'own'
     inputs = dict(sigma=sigma, xgm=xgm, gm=gm, f=f, couponrate=couponrate, csr=csr, dsr=dsr,
                   std=std, ltd=ltd, lev=lev, rf=rf, prc=prc, shares=shares, sti=sti)
     if verbose:
         print(f"\n=== gvkey {gvkey}, {key} ===")
+        if f_imputed:
+            print("  no XSGA reported in any year: F = 0 (SG&A assumed inside COGS)")
         check_inputs(inputs)
     missing = [k for k, v in inputs.items() if v is None or pd.isna(v)]
     if missing:
         raise ValueError(f"missing inputs {missing}")
     if gm <= 0:
         raise ValueError(f"non-positive gross margin {gm}; excluded as in EGZ")
+    if egz.pi_coef(xgm, csr, dsr) <= 0:
+        raise ValueError(f"Pi <= 0 even with the firm's own CSR/DSR ({csr:.3f}/{dsr:.3f}); no model value")
 
     firm = egz.FirmInputs(gm=gm, gm_ratio=xgm, csr=csr, dsr=dsr, F=f, sigma=sigma,
                           ltd=ltd, std=std, coupon_rate=couponrate, st_rate=sti,
@@ -1539,7 +1575,7 @@ def get_frmyr_miu_q_egz(gvkey, key, verbose=True):
         print(f"    CoE = (R_A - w_d*CoD)/w_e   = ({r_a:.4f} - {w_d:.3f}*{couponrate:.4f})/{1 - w_d:.3f} = {coe:.4f}")
         print(f"    implied firm premium CoE - r = {coe - rf:+.4f}")
     return {'gvkey': gvkey, 'date': key, 'mu_q': mu_q, 'r_a': r_a, 'coe': coe, 'me': me,
-            'w_d': w_d, 'sigma': sigma, 'xgm': xgm,
+            'w_d': w_d, 'sigma': sigma, 'xgm': xgm, 'f_imputed': f_imputed, 'csr_source': csr_source,
             'gm': gm, 'f': f, 'couponrate': couponrate, 'csr': csr, 'dsr': dsr, 'std': std,
             'ltd': ltd, 'lev': lev, 'rf': rf, 'prc': prc, 'shares': shares, 'sti': sti}
 
@@ -1977,6 +2013,7 @@ if __name__ == "__main__":
     parser.add_argument('--date', type=int, default=19831231)
     parser.add_argument('--out', default='egz_results.csv')
     parser.add_argument('--quiet', action='store_true', help='only print one line per firm')
+    parser.add_argument('--include-financials', action='store_true', help='keep SIC 60-69 firms')
     cli = parser.parse_args()
     summarize_data()
     gvkeys = cli.gvkey
@@ -1985,7 +2022,8 @@ if __name__ == "__main__":
     rows = []
     for gv in gvkeys:
         try:
-            rows.append(get_frmyr_miu_q_egz(gv, cli.date, verbose=not cli.quiet))
+            rows.append(get_frmyr_miu_q_egz(gv, cli.date, verbose=not cli.quiet,
+                                            include_financials=cli.include_financials))
             res = rows[-1]
             print(f"RESULT gvkey={gv} mu_Q={res['mu_q']:+.4f} R_A={res['r_a']:.4f} CoE={res['coe']:.4f}")
         except Exception as e:
